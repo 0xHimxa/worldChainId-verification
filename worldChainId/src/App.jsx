@@ -1,6 +1,9 @@
 import { useState } from "react";
 import "./App.css";
+import { IDKitWidget, VerificationLevel } from "@worldcoin/idkit";
 
+const APP_ID = import.meta.env.VITE_WORLD_APP_ID;
+const ACTION = import.meta.env.VITE_WORLD_ACTION;
 
 function App() {
   const [proof, setProof] = useState(null);
