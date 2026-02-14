@@ -1,17 +1,119 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { IDKitWidget, VerificationLevel } from "@worldcoin/idkit";
 
 const APP_ID = import.meta.env.VITE_WORLD_APP_ID;
 const ACTION = import.meta.env.VITE_WORLD_ACTION;
+const SUPPORTED_CHAIN_IDS =
+  import.meta.env.VITE_SUPPORTED_CHAIN_IDS ?? "1,11155111,480,4801";
 
 function App() {
   const [proof, setProof] = useState(null);
   const [error, setError] = useState(null);
+  const [walletAddress, setWalletAddress] = useState(null);
+  const [chainIdHex, setChainIdHex] = useState(null);
+  const [walletError, setWalletError] = useState(null);
+
+  const supportedChainIdSet = useMemo(() => {
+    return new Set(
+      SUPPORTED_CHAIN_IDS.split(",")
+        .map((id) => Number(id.trim()))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    );
+  }, []);
+
+  const chainId = chainIdHex ? parseInt(chainIdHex, 16) : null;
+  const isConnected = Boolean(walletAddress);
+  const isSupportedChain = chainId !== null && supportedChainIdSet.has(chainId);
+  const canVerify = isConnected && isSupportedChain;
+
+  useEffect(() => {
+    if (!window.ethereum) {
+      return;
+    }
+
+    let unmounted = false;
+
+    const syncWalletState = async () => {
+      try {
+        const [accounts, nextChainIdHex] = await Promise.all([
+          window.ethereum.request({ method: "eth_accounts" }),
+          window.ethereum.request({ method: "eth_chainId" }),
+        ]);
+
+        if (unmounted) return;
+
+        setWalletAddress(accounts?.[0] ?? null);
+        setChainIdHex(nextChainIdHex ?? null);
+      } catch (err) {
+        if (unmounted) return;
+        setWalletError(err?.message ?? "Failed to read wallet state.");
+      }
+    };
+
+    const handleAccountsChanged = (accounts) => {
+      setWalletAddress(accounts?.[0] ?? null);
+      setProof(null);
+      setError(null);
+    };
+
+    const handleChainChanged = (nextChainIdHex) => {
+      setChainIdHex(nextChainIdHex);
+      setProof(null);
+      setError(null);
+    };
+
+    syncWalletState();
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    window.ethereum.on("chainChanged", handleChainChanged);
+
+    return () => {
+      unmounted = true;
+      window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
+      window.ethereum.removeListener("chainChanged", handleChainChanged);
+    };
+  }, []);
+
+  const connectWallet = async () => {
+    setWalletError(null);
+
+    if (!window.ethereum) {
+      setWalletError("No Ethereum wallet found. Install MetaMask or a compatible wallet.");
+      return;
+    }
+
+    try {
+      const [accounts, nextChainIdHex] = await Promise.all([
+        window.ethereum.request({ method: "eth_requestAccounts" }),
+        window.ethereum.request({ method: "eth_chainId" }),
+      ]);
+
+      setWalletAddress(accounts?.[0] ?? null);
+      setChainIdHex(nextChainIdHex ?? null);
+    } catch (err) {
+      setWalletError(err?.message ?? "Wallet connection rejected.");
+    }
+  };
+
 
   const handleVerify = async (proof) => {
+    if (!canVerify) {
+      throw new Error(
+        "Wallet must be connected on a supported EVM chain before verification."
+      );
+    }
+
+    const verificationPayload = {
+      walletAddress,
+      chainId,
+      proof,
+    };
+
     console.log("=== handleVerify called ===");
-    console.log("Proof received:", JSON.stringify(proof, null, 2));
+    console.log(
+      "Wallet + proof payload:",
+      JSON.stringify(verificationPayload, null, 2)
+    );
 
     // For now, just accept the proof (no server-side verification)
     // In production, you'd send this to your backend to verify
@@ -40,6 +142,38 @@ function App() {
         alignItems: "center",
       }}
     >
+      <h2>Step 1: Connect Wallet</h2>
+      <button
+        onClick={connectWallet}
+        style={{
+          padding: "12px 24px",
+          fontSize: "16px",
+          cursor: "pointer",
+        }}
+      >
+        {isConnected ? "Reconnect Wallet" : "Connect EVM Wallet"}
+      </button>
+
+      <div style={{ fontSize: "12px", color: "#555", textAlign: "center" }}>
+        <div>
+          <strong>Wallet:</strong> {walletAddress || "Not connected"}
+        </div>
+        <div>
+          <strong>Chain ID:</strong> {chainId || "Unknown"}
+        </div>
+        <div>
+          <strong>Chain supported:</strong> {isSupportedChain ? "Yes" : "No"}
+        </div>
+      </div>
+
+      {walletError && (
+        <p style={{ color: "#b00020", fontWeight: "bold" }}>{walletError}</p>
+      )}
+
+      <hr style={{ margin: '20px 0' }} />
+
+
+      
       <h2>World Chain Staging Environment</h2>
       <div style={{ fontSize: "12px", color: "#555", textAlign: "center" }}>
         <div>
@@ -60,14 +194,18 @@ function App() {
       >
         {({ open }) => (
           <button
-            onClick={open}
+            onClick={() => canVerify && open()}
+            disabled={!canVerify}
             style={{
               padding: "12px 24px",
               fontSize: "16px",
-              cursor: "pointer",
+              cursor: canVerify ? "pointer" : "not-allowed",
+              opacity: canVerify ? 1 : 0.5,
             }}
           >
-            Verify with World ID
+            {canVerify
+              ? "Verify with World ID"
+              : "Connect wallet on a supported chain to verify"}
           </button>
         )}
       </IDKitWidget>
